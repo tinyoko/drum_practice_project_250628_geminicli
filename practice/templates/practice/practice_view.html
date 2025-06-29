@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ song.title }} - Drum Practice</title>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <style>
+        body { 
+            font-family: sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        #header-container {
+            display: flex;
+            align-items: center;
+            width: 90%;
+            margin-bottom: 20px;
+        }
+        h1 { 
+            flex-grow: 1; /* Allow h1 to take up available space */
+            text-align: center; /* Center h1 within its flex item */
+            margin: 0; /* Remove default margin */
+        }
+
+        .return-button-container {
+            /* No specific styling needed here, as it's handled by header-container */
+        }
+        .return-button-container .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+        .return-button-container .button:hover {
+            background-color: #0056b3;
+        }
+
+        #waveform-container {
+            width: 90%;
+            margin-bottom: 20px;
+        }
+        #waveform {
+            height: 128px; /* Ensure waveform has a height */
+        }
+        .controls {
+            text-align: center; /* Center Play/Pause button */
+            margin-top: 10px;
+        }
+
+        #main-view-container {
+            display: flex;
+            gap: 20px;
+            width: 90%;
+            height: 70vh; /* Set height here */
+            margin-bottom: 20px;
+        }
+        #timings-section {
+            flex: 0 0 280px; /* Fixed width for the timings panel */
+            border: 1px solid #ccc;
+            padding: 15px;
+            overflow-y: auto;
+            height: 100%;
+            box-sizing: border-box;
+        }
+        #timings-section h2 {
+            margin-top: 0;
+            font-size: 1.2em;
+        }
+        #timings-list {
+            list-style-type: none;
+            padding: 0;
+            margin-bottom: 15px;
+        }
+        #timings-list li {
+            padding: 8px 5px;
+            border-bottom: 1px solid #eee;
+            font-size: 0.9em;
+        }
+        #timings-section button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+        }
+
+        #pdf-container { 
+            flex: 1 1 auto; /* Takes up the remaining space */
+            display: flex; 
+            justify-content: center; 
+            align-items: center;
+            gap: 10px; 
+            height: 100%;
+            box-sizing: border-box;
+        }
+        canvas { 
+            border: 1px solid black;
+            display: none; /* Initially hide canvases */
+            /* These dimensions will be set by JS based on aspect ratio */
+            max-width: calc(50% - 5px); /* Each canvas takes half the width minus half the gap */
+            max-height: 100%; /* Take full height of parent */
+        }
+    </style>
+</head>
+<body>
+    <div id="header-container">
+        <div class="return-button-container">
+            <a href="{% url 'song_list' %}" class="button">Back to Song List</a>
+        </div>
+        <h1>{{ song.title }}</h1>
+    </div>
+
+    <div id="waveform-container">
+        <div id="waveform"></div>
+        <div class="controls">
+            <button id="play-pause">Play/Pause</button>
+        </div>
+    </div>
+
+    <div id="main-view-container">
+        <!-- Timings Management -->
+        <div id="timings-section">
+            <h2>Page Turn Timings</h2>
+            <ul id="timings-list"></ul>
+            <button id="add-timing">Add Current Time as Page Turn</button>
+            <button id="save-timings">Save Timings</button>
+        </div>
+
+        <!-- PDF Viewer -->
+        <div id="pdf-container">
+            <canvas id="pdf-canvas-left"></canvas>
+            <canvas id="pdf-canvas-right"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // --- CSRF Token for Fetch ---
+        const csrfToken = '{{ csrf_token }}';
+
+        // --- DOM Elements ---
+        const canvasLeft = document.getElementById('pdf-canvas-left');
+        const canvasRight = document.getElementById('pdf-canvas-right');
+        const ctxLeft = canvasLeft.getContext('2d');
+        const ctxRight = canvasRight.getContext('2d');
+        const timingsList = document.getElementById('timings-list');
+        const pdfContainer = document.getElementById('pdf-container');
+
+        // --- State ---
+        const pdfUrl = "{{ score.pdf_file.url }}";
+        let timings = {{ score.page_timings|safe }};
+        let pdfDoc = null;
+        let currentPage = 1; // Represents the page number to be displayed (or the left page in a spread)
+
+        // --- PDF.js Setup ---
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js';
+
+        async function renderPage(pageNum, canvas, context) {
+            if (!pdfDoc) return;
+            const page = await pdfDoc.getPage(pageNum);
+            const containerWidth = canvas.parentElement.clientWidth / 2 - 5; // Half of pdf-container width, minus half the gap
+            const containerHeight = canvas.parentElement.clientHeight;
+
+            const viewport = page.getViewport({ scale: 1.0 });
+            const scaleX = containerWidth / viewport.width;
+            const scaleY = containerHeight / viewport.height;
+            const scale = Math.min(scaleX, scaleY); // Use the smaller scale to fit both dimensions
+
+            const scaledViewport = page.getViewport({ scale: scale });
+
+            canvas.height = scaledViewport.height;
+            canvas.width = scaledViewport.width;
+
+            const renderContext = {
+                canvasContext: context,
+                viewport: scaledViewport
+            };
+            await page.render(renderContext).promise;
+        }
+
+        async function displayPages(leftPageNum, rightPageNum) {
+            // Centralize logic for showing/hiding canvases
+            const showCanvas = async (canvas, ctx, pageNum) => {
+                if (pageNum > 0 && pageNum <= pdfDoc.numPages) {
+                    canvas.style.display = 'block';
+                    await renderPage(pageNum, canvas, ctx);
+                } else {
+                    canvas.style.display = 'none';
+                }
+            };
+
+            await Promise.all([
+                showCanvas(canvasLeft, ctxLeft, leftPageNum),
+                showCanvas(canvasRight, ctxRight, rightPageNum)
+            ]);
+        }
+
+        function updatePdfPages() {
+            if (!pdfDoc) return;
+            const totalPages = pdfDoc.numPages;
+
+            // Case 1: Single page PDF -> show on right canvas, centered
+            if (totalPages === 1) {
+                displayPages(0, 1);
+                return;
+            }
+
+            // Case 2: Multi-page PDF
+            let leftPage = currentPage;
+            let rightPage = currentPage + 1;
+
+            // If left page is the last page, show it alone on the left canvas
+            if (leftPage === totalPages && totalPages % 2 !== 0) {
+                 displayPages(leftPage, 0);
+            } else {
+                 displayPages(leftPage, rightPage);
+            }
+        }
+
+        // --- Wavesurfer.js Setup ---
+        const wavesurfer = WaveSurfer.create({
+            container: '#waveform',
+            waveColor: 'violet',
+            progressColor: 'purple',
+            mediaControls: false, // We use our own button
+        });
+
+        wavesurfer.load("{{ song.audio_file.url }}");
+
+        document.getElementById('play-pause').addEventListener('click', () => {
+            wavesurfer.playPause();
+        });
+
+        // --- Timings Logic ---
+        function renderTimings() {
+            timingsList.innerHTML = '';
+            timings.sort((a, b) => a - b).forEach((time, index) => {
+                const li = document.createElement('li');
+                li.textContent = `Turn to Page ${index + 2} at: ${time.toFixed(2)}s`;
+                timingsList.appendChild(li);
+            });
+        }
+
+        document.getElementById('add-timing').addEventListener('click', () => {
+            const currentTime = wavesurfer.getCurrentTime();
+            if (!timings.includes(currentTime)) {
+                timings.push(currentTime);
+                renderTimings();
+            }
+        });
+
+        document.getElementById('save-timings').addEventListener('click', () => {
+            fetch("{% url 'save_timings' score.id %}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({ timings: timings.sort((a, b) => a - b) })
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.status === 'success') {
+                      alert('Timings saved!');
+                  } else {
+                      alert('Error saving timings.');
+                  }
+              });
+        });
+
+        // --- Syncing Logic ---
+        wavesurfer.on('audioprocess', (currentTime) => {
+            let newPage = 1;
+            // Timings are for turning TO page 2, 3, etc.
+            for (let i = 0; i < timings.length; i++) {
+                if (currentTime >= timings[i]) {
+                    newPage = i + 2;
+                }
+            }
+
+            if (newPage !== currentPage) {
+                currentPage = newPage;
+                updatePdfPages();
+            }
+        });
+        
+        // --- Initial Load ---
+        wavesurfer.on('ready', () => {
+            pdfjsLib.getDocument(pdfUrl).promise.then(doc => {
+                pdfDoc = doc;
+                currentPage = 1; // Always start at page 1
+                updatePdfPages(); // Initial render
+                renderTimings();
+            });
+        });
+
+    </script>
+</body>
+</html>
+        .controls {
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        #main-view-container {
+            display: flex;
+            gap: 20px;
+            width: 90%;
+            height: 70vh; /* Set height here */
+            margin-bottom: 20px;
+        }

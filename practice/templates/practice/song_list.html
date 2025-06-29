@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Song List</title>
+</head>
+<body>
+    <h1>Song List</h1>
+    <ul>
+        {% for song in songs %}
+            <li><a href="{% url 'practice_view' song.id %}">{{ song.title }}</a></li>
+        {% endfor %}
+    </ul>
+    <a href="{% url 'upload_song' %}">Upload New Song</a>
+</body>
+</html>

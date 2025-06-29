@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Song</title>
+</head>
+<body>
+    <h1>Upload Song</h1>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <label for="title">Title:</label><br>
+        <input type="text" id="title" name="title"><br>
+        <label for="audio_file">Audio File (MP3):</label><br>
+        <input type="file" id="audio_file" name="audio_file" accept=".mp3"><br>
+        <label for="pdf_file">Score File (PDF):</label><br>
+        <input type="file" id="pdf_file" name="pdf_file" accept=".pdf"><br><br>
+        <input type="submit" value="Upload">
+    </form>
+</body>
+</html>
